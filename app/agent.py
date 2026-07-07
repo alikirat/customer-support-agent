@@ -87,13 +87,40 @@ def save_query(ctx: Context, node_input: str):
     if queries.count(node_input) >= 3:
         escalate_due_to_repeats = True
 
-    yield Event(
-        output=node_input,
-        state={  # type: ignore
-            "user_query": node_input,
-            "queries_history": queries,
-            "escalate_due_to_repeats": escalate_due_to_repeats,
-        },
+    event_state = {
+        "user_query": node_input,
+        "queries_history": queries,
+        "escalate_due_to_repeats": escalate_due_to_repeats,
+    }
+    yield Event(output=node_input, state=event_state)  # type: ignore
+
+
+@node
+def guardrail(ctx: Context, node_input: str) -> Event:
+    injection_phrases = [
+        "ignore previous instructions",
+        "ignore instructions",
+        "you are now",
+        "system prompt",
+        "reveal system",
+        "ignore the above",
+    ]
+    query_lower = node_input.lower()
+    flagged = any(phrase in query_lower for phrase in injection_phrases)
+
+    if flagged:
+        print(f"[GUARDRAIL] Flagged prompt-injection attempt: '{node_input}'")
+        return Event(output=node_input, route="flagged")  # type: ignore
+    else:
+        return Event(output=node_input, route="safe")  # type: ignore
+
+
+@node
+def flagged_response(ctx: Context) -> Event:
+    text = "I'm sorry, but I cannot process that request."
+    return Event(
+        content=types.Content(role="model", parts=[types.Part.from_text(text=text)]),
+        output=text,
     )
 
 
@@ -183,7 +210,10 @@ def escalate(ctx: Context) -> Event:
 root_agent = Workflow(
     name="customer_support_workflow",
     edges=[
-        *Edge.chain(START, save_query, classifier_agent, router),
+        *Edge.chain(START, save_query, guardrail),
+        (guardrail, classifier_agent, "safe"),
+        (guardrail, flagged_response, "flagged"),
+        (classifier_agent, router),
         (router, shipping_faq_agent, "shipping"),
         (router, polite_decline, "unrelated"),
         (router, escalate, "escalate"),
