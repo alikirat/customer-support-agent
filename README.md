@@ -102,3 +102,28 @@ agents-cli lint
 * **`tests/`**: Unit and integration test suites.
 * **`pyproject.toml`**: Dependency declarations and linter configurations.
 * **`.env`**: Developer configuration & secrets.
+
+---
+
+## Capstone: AI Agents Intensive (Kaggle x Google, June 2026)
+
+This project demonstrates three core concepts from the course:
+
+1. **Multi-Agent ADK 2.0 Graph Workflow** — A graph of specialized nodes (`save_query`, `guardrail`, `classifier_agent`, `router`, `shipping_faq_agent`, `escalate`, etc.) route customer queries to the right handler.
+
+2. **Agent Skill** — An escalation policy skill (`.agents/skills/escalation-policy/`) encodes business rules for when a query should route to a human: expressed anger, legal action mentions, refunds over $200, or repeated queries (3+ times).
+
+3. **Security Guardrail** — A guardrail node intercepts every query before classification, checking for prompt-injection patterns (e.g. "ignore previous instructions," "reveal system prompt"). Flagged queries are short-circuited to a safe generic response instead of reaching the LLM.
+
+All three behaviors are covered by automated unit tests (13 passing) and verified manually via the ADK Playground.
+
+### Visual Walkthrough
+
+![normal-routing](docs/screenshots/normal-routing.png)
+*The full agent graph architecture, showing a routine shipping inquiry routed safely through the guardrail, classifier, and router to the shipping FAQ agent.*
+
+![escalation-triggered](docs/screenshots/escalation-triggered.png)
+*A query with anger and legal-action language, correctly classified and routed to human escalation.*
+
+![guardrail-flagged](docs/screenshots/guardrail-flagged.png)
+*A prompt-injection attempt detected and blocked before reaching the classifier.*
