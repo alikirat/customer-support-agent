@@ -67,14 +67,34 @@ graph_module._process_chain = custom_process_chain
 
 
 class InquiryCategory(BaseModel):
-    category: Literal["shipping", "unrelated"] = Field(
-        description="The category of the user inquiry. Set to 'shipping' if the inquiry is about shipping rates, package tracking, delivery status, or product returns. Set to 'unrelated' for all other inquiries (e.g. general chit-chat, unrelated questions)."
+    category: Literal["shipping", "unrelated", "escalate"] = Field(
+        description=(
+            "The category of the user inquiry. Use 'escalate' if the message expresses anger, "
+            "mentions legal action, or requests a refund over $200. "
+            "Use 'shipping' if it is a general shipping query (rates, tracking, delivery status, returns). "
+            "Use 'unrelated' otherwise."
+        )
     )
 
 
 @node
-def save_query(node_input: str):
-    yield Event(output=node_input, state={"user_query": node_input})  # type: ignore
+def save_query(ctx: Context, node_input: str):
+    queries = ctx.state.get("queries_history", [])
+    queries.append(node_input)
+
+    # Escalation policy check: repeating the same issue more than twice (i.e. >= 3 occurrences)
+    escalate_due_to_repeats = False
+    if queries.count(node_input) >= 3:
+        escalate_due_to_repeats = True
+
+    yield Event(
+        output=node_input,
+        state={  # type: ignore
+            "user_query": node_input,
+            "queries_history": queries,
+            "escalate_due_to_repeats": escalate_due_to_repeats,
+        },
+    )
 
 
 classifier_agent = LlmAgent(
@@ -82,8 +102,10 @@ classifier_agent = LlmAgent(
     model="gemini-flash-latest",
     instruction=(
         "You are a customer query classifier for a shipping company.\n"
-        "Analyze the user query and determine if it is related to shipping (such as rates, tracking, delivery status, or returns) or unrelated.\n"
-        "Set `category` to 'shipping' if it is related to shipping, or 'unrelated' if it is unrelated."
+        "Analyze the user query and determine if it should be categorized as 'shipping', 'unrelated', or 'escalate'.\n"
+        "Set `category` to 'escalate' if the customer expresses anger, mentions taking legal action, or asks for a refund over $200.\n"
+        "Set `category` to 'shipping' if it is a general shipping query (rates, tracking, delivery status, returns).\n"
+        "Set `category` to 'unrelated' otherwise."
     ),
     output_schema=InquiryCategory,
     output_key="inquiry_category",
@@ -92,8 +114,13 @@ classifier_agent = LlmAgent(
 
 @node
 def router(ctx: Context) -> Event:
-    inquiry_category = ctx.state.get("inquiry_category")
-    category = inquiry_category.get("category") if inquiry_category else "unrelated"
+    # First, check programmatic escalation triggers from save_query node
+    if ctx.state.get("escalate_due_to_repeats"):
+        category = "escalate"
+    else:
+        inquiry_category = ctx.state.get("inquiry_category")
+        category = inquiry_category.get("category") if inquiry_category else "unrelated"
+
     user_query = ctx.state.get("user_query")
     return Event(output=user_query, route=category)  # type: ignore
 
@@ -141,12 +168,25 @@ def polite_decline(ctx: Context) -> Event:
     )
 
 
+@node
+def escalate(ctx: Context) -> Event:
+    text = (
+        "I understand your concern and I am connecting you to a human agent "
+        "who can assist you further with this request. Please hold on for a moment!"
+    )
+    return Event(
+        content=types.Content(role="model", parts=[types.Part.from_text(text=text)]),
+        output=text,
+    )
+
+
 root_agent = Workflow(
     name="customer_support_workflow",
     edges=[
         *Edge.chain(START, save_query, classifier_agent, router),
         (router, shipping_faq_agent, "shipping"),
         (router, polite_decline, "unrelated"),
+        (router, escalate, "escalate"),
     ],
 )
 
